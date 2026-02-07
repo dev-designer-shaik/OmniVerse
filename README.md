@@ -1,117 +1,79 @@
-# NVIDIA Omniverse Integration
+# OmniVerse – Custom Thor + QNAP USD Pipeline
 
-Full NVIDIA Omniverse integration between x86 workstation (RTX 3070 Ti) and Jetson Thor.
+This repo documents our customized Omniverse stack that connects an x86 authoring workstation, Jetson Thor (headless USD services + local 3D generation), and QNAP storage. It focuses on **our local workflow** rather than general Omniverse setup.
 
-## Architecture
+## What’s Customized
+
+- **Thor USD Brain Service** (headless Kit app) is the SSOT for versioned USD scenes under `/srv/omniverse/scenes`.
+- **Local 3D generation on Thor** (TRELLIS / TripoSR) produces GLB/USD assets used in scenes.
+- **QNAP-mounted storage** feeds models into the pipeline (via mount + bridge tooling in the qnap-bridge repo).
+- **Lightweight HTTP USD server** as a fallback when Nucleus isn’t in use.
+
+## High-Level Topology
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        x86 PC (192.168.10.146)                              │
-│                           RTX 3070 Ti                                       │
-│  ┌─────────────────┐  ┌────────────────────┐  ┌────────────────────────┐   │
-│  │  USD Composer   │  │  Nucleus Server    │  │  HTTP File Server      │   │
-│  │  (Kit SDK)      │  │  (Enterprise)      │  │  :8080 (fallback)      │   │
-│  │  Authoring      │  │  :3009 (API)       │  │                        │   │
-│  └────────┬────────┘  │  :8080 (Web)       │  └────────────────────────┘   │
-│           │           └─────────┬──────────┘                               │
-│           └─────────────────────┼──────────────────────────────────────────┤
-└─────────────────────────────────┼──────────────────────────────────────────┘
-                                  │ omniverse://
-                                  │ USD LiveSync
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      Jetson Thor (192.168.10.156)                           │
-│                    JetPack 7.x | CUDA 13.0 | 122.8GB                        │
-│  ┌─────────────────────┐  ┌────────────────────┐  ┌─────────────────────┐  │
-│  │  Isaac Sim          │  │  Personaplex 7B    │  │  Isaac ROS          │  │
-│  │  (headless)         │  │  Speech-to-Speech  │  │  Robot Control      │  │
-│  │  Simulation         │  │  :8998 (SSL)       │  │                     │  │
-│  └─────────────────────┘  └────────────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+QNAP NAS (SMB/NFS) ──► Thor (/mnt/qnap_share) ──► /srv/omniverse/scenes (SSOT)
+                                      │
+                                      ├─ Thor USD Brain Service (Kit) :8011
+                                      ├─ Local Model Gen (TRELLIS/TripoSR)
+                                      └─ USD outputs (.usd/.usda)
+
+x86 Workstation (Authoring)
+  ├─ USD Composer (Kit)
+  └─ Optional Nucleus Server (enterprise)
 ```
 
-## Components
+## Quick Start (Our Environment)
 
-### 1. USD Composer (x86 PC)
-Scene authoring and USD creation using Kit SDK.
-- Location: `~/kit-app-template/`
-- Start: `./run_usd_composer.sh`
-
-### 2. Nucleus Enterprise Server (x86 PC)
-Central USD file management with collaboration features.
-- Location: `~/nucleus-server/`
-- Config: `base_stack/nucleus-stack.env`
-- **Status**: Requires Omniverse Enterprise subscription with Nucleus entitlement
-
-### 3. USD File Server (Fallback)
-Simple HTTP server for USD file access when Nucleus is unavailable.
-- Port: 8080
-- Access: `http://192.168.10.146:8080/stages/scene.usd`
-
-### 4. Isaac Sim (Jetson Thor)
-Headless simulation for robotics applications.
-- Connects to Nucleus via `omniverse://192.168.10.146/`
-
-## Quick Start
-
-### Start USD Composer (x86 PC)
+### 1) Start Thor USD Brain Service (Jetson Thor)
 ```bash
-cd ~/kit-app-template
-./run_usd_composer.sh
+/home/dsi-thor/kit-app-template/_build/linux-aarch64/release/kit/kit \
+  /home/dsi-thor/kit-app-template/source/apps/thor.usd_brain.kit
 ```
 
-### Start File Server (Fallback)
+### 2) Start USD HTTP fallback server (x86)
 ```bash
 cd ~/OmniVerse/scripts
 ./start_usd_server.sh
 ```
 
-### Start Nucleus Enterprise (when entitlements available)
+### 3) Optional: Start Nucleus Enterprise (x86)
 ```bash
 cd ~/nucleus-server/base_stack
 docker compose --env-file nucleus-stack.env -f nucleus-stack-no-ssl.yml up -d
 ```
 
-## Directory Structure
+## Key Paths
+
+- **Thor scenes SSOT**: `/srv/omniverse/scenes`
+- **QNAP mount (Thor)**: `/mnt/qnap_share`
+- **Local USD stages (x86)**: `~/OmniVerse/stages`
+- **Reusable assets (x86)**: `~/OmniVerse/assets`
+
+## Ports (Typical)
+
+| Service | Host | Port | Notes |
+|--------|------|------|------|
+| Thor USD Brain Service | Thor | 8011 | API docs at `/docs` |
+| Nucleus API | x86 | 3009 | Optional enterprise setup |
+| Nucleus Web | x86 | 8080 | Optional enterprise setup |
+| USD HTTP fallback | x86 | 8080 | If Nucleus is not used |
+
+## Repo Structure
 
 ```
 OmniVerse/
 ├── README.md
 ├── scripts/
-│   ├── start_usd_server.sh      # HTTP fallback server
-│   └── setup_nucleus.sh          # Nucleus setup script
-├── stages/                       # USD scene files
-├── assets/                       # Reusable USD assets
-├── nucleus-config/               # Nucleus Enterprise configuration
-│   └── nucleus-stack.env.example
-└── docs/
-    ├── ARCHITECTURE.md
-    ├── NUCLEUS_SETUP.md
-    └── ISAAC_SIM_SETUP.md
+│   ├── start_usd_server.sh
+│   └── setup_nucleus.sh
+├── stages/                 # USD scenes for local authoring
+├── assets/                 # Reusable USD assets
+├── nucleus-config/         # Nucleus Enterprise configuration
+└── docs/                   # Architecture + setup notes
 ```
 
-## Nucleus Enterprise Requirements
+## Notes
 
-The Nucleus Enterprise containers require:
-1. NGC account with Omniverse Enterprise subscription
-2. Nucleus Enterprise entitlement (not included in Essentials)
-3. NGC API key with appropriate access
-
-NGC Login:
-```bash
-docker login nvcr.io --username '$oauthtoken' --password '<NGC_API_KEY>'
-```
-
-## Network Configuration
-
-| Service | Host | Port | Protocol |
-|---------|------|------|----------|
-| Nucleus API | 192.168.10.146 | 3009 | TCP |
-| Nucleus Web | 192.168.10.146 | 8080 | HTTP |
-| Nucleus LFT | 192.168.10.146 | 3030 | TCP |
-| USD HTTP (fallback) | 192.168.10.146 | 8080 | HTTP |
-| Personaplex | 192.168.10.156 | 8998 | HTTPS |
-
-## Related Repositories
-
-- [Personaplex](https://github.com/dev-designer-shaik/Personaplex) - NVIDIA Personaplex 7B deployment on Jetson Thor
+- This repo is the **custom integration layer**. Operational tools for QNAP ingestion and USD versioning live in the **qnap-bridge** repo.
+- Thor runs headless Kit services and local model generation; x86 is used for authoring and optional Nucleus.
